@@ -1,0 +1,22 @@
+<!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1,maximum-scale=1,user-scalable=no"><style>html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#07121e}#globe{width:100%;height:100%}</style></head><body><div id="globe"></div><script src="https://unpkg.com/globe.gl"></script><script>
+// Online-only rendering proof of concept. Do not ship CDN scripts in production.
+const globe = Globe()(document.getElementById('globe'))
+ .globeImageUrl('https://unpkg.com/three-globe/example/img/earth-blue-marble.jpg')
+ .bumpImageUrl('https://unpkg.com/three-globe/example/img/earth-topology.png')
+ .backgroundColor('#07121e').showAtmosphere(true).atmosphereColor('#4b91bd').atmosphereAltitude(.16);
+function fitGlobe(){
+  const w=window.innerWidth, h=window.innerHeight;
+  globe.width(w).height(h);
+}
+window.addEventListener('resize',fitGlobe);
+setTimeout(fitGlobe,100);
+setTimeout(fitGlobe,650);
+globe.pointOfView({lat:18,lng:-25,altitude:1.8},0);
+window.resetGlobe=()=>{
+  globe.pointOfView({lat:18,lng:-25,altitude:1.8},900);
+  globe.controls().autoRotate=true;
+};
+globe.controls().autoRotate=true;globe.controls().autoRotateSpeed=.35;
+function flyTo(lat,lng){globe.controls().autoRotate=false;globe.pointOfView({lat:lat,lng:lng,altitude:0.35},2200)}
+window.flyTo=flyTo;
+</script></body></html>
