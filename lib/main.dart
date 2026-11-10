@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:math';
 import 'package:http/http.dart' as http;
@@ -8,6 +9,8 @@ import 'package:geolocator/geolocator.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:flutter_compass/flutter_compass.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 void main() => runApp(const DriftApp());
 const ink = Color(0xFF07121E);
@@ -149,6 +152,36 @@ class _DriftHomeState extends State<DriftHome> {
   }
 
   int? roadDistanceMeters;
+
+  Future<void> openGoogleMaps() async {
+    if (destination == null) return;
+    final d = destination!;
+    final uri = Uri.https('www.google.com', '/maps/dir/', {
+      'api': '1', 'destination': '${d.latitude},${d.longitude}',
+      'travelmode': 'driving',
+    });
+    if (!await launchUrl(uri, mode: LaunchMode.externalApplication)) {
+      showMessage('Could not open Google Maps.');
+    }
+  }
+
+  Future<void> startJourney() async {
+    if (destination == null || routePoints.isEmpty) return;
+    if (!await Geolocator.isLocationServiceEnabled()) {
+      showMessage('Enable location services to start a journey.'); return;
+    }
+    var permission = await Geolocator.checkPermission();
+    if (permission == LocationPermission.denied) permission = await Geolocator.requestPermission();
+    if (permission == LocationPermission.denied || permission == LocationPermission.deniedForever) {
+      showMessage('Location permission is required for live journey tracking.'); return;
+    }
+    if (!mounted) return;
+    await Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => JourneyScreen(
+      destination: destination!, route: List.of(routePoints),
+      metricUnits: metricUnits, warning: accessibilityWarning,
+    )));
+  }
+
 
   Future<void> findRandomDestination() async {
     final origin = mapStart;
@@ -414,9 +447,14 @@ class _DriftHomeState extends State<DriftHome> {
                 urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
                 userAgentPackageName: 'com.driftapp.drift_globe_poc',
               ),
-              if (routePoints.isNotEmpty) PolylineLayer(polylines: [Polyline(
-                points: routePoints, strokeWidth: 5, color: brass,
-              )]),
+              if (routePoints.isNotEmpty) ...[
+                PolylineLayer(polylines: [Polyline(
+                  points: routePoints, strokeWidth: 13, color: brass.withOpacity(.25),
+                )]),
+                PolylineLayer(polylines: [Polyline(
+                  points: routePoints, strokeWidth: 5, color: const Color(0xFFFFD58B),
+                )]),
+              ],
               MarkerLayer(markers: [
                 Marker(point: mapStart!, width: 42, height: 42,
                   child: const Icon(Icons.my_location, color: brass, size: 34)),
@@ -538,6 +576,12 @@ class _DriftHomeState extends State<DriftHome> {
                       Text(destinationName!, style: const TextStyle(color: brass, fontSize: 18)),
                       if (roadDistanceMeters != null) Text('Route verified: ${metricUnits ? (roadDistanceMeters! / 1000).toStringAsFixed(1) + ' km' : (roadDistanceMeters! / 1609.344).toStringAsFixed(1) + ' mi'}'),
                       const Text('Route preview only. No turn-by-turn navigation.'),
+                      const SizedBox(height: 10),
+                      FilledButton.icon(onPressed: startJourney,
+                        icon: const Icon(Icons.explore), label: const Text('Start Journey')),
+                      OutlinedButton.icon(onPressed: openGoogleMaps,
+                        icon: const Icon(Icons.map_outlined), label: const Text('Open in Google Maps')),
+
                     ],
                     if (explorationError != null) Padding(
                       padding: const EdgeInsets.only(top: 12),
@@ -557,4 +601,203 @@ class _DriftHomeState extends State<DriftHome> {
       ]),
     ),
   );
+}
+
+
+/// Full-screen, foreground-only journey tracking. No background tracking or turn-by-turn guidance.
+class JourneyScreen extends StatefulWidget {
+  final LatLng destination;
+  final List<LatLng> route;
+  final bool metricUnits;
+  final String warning;
+  const JourneyScreen({super.key, required this.destination, required this.route,
+    required this.metricUnits, required this.warning});
+  @override
+  State<JourneyScreen> createState() => _JourneyScreenState();
+}
+
+class _JourneyScreenState extends State<JourneyScreen> {
+  final MapController map = MapController();
+  StreamSubscription<Position>? gps;
+  StreamSubscription<CompassEvent>? compass;
+  LatLng? current;
+  double? heading;
+  bool paused = false;
+  bool phoneAway = false;
+  bool follow = true;
+  bool northUp = false;
+  bool mapReady = false;
+  String status = 'Waiting for GPS';
+  late final String noteKey = 'journey_note_${widget.destination.latitude.toStringAsFixed(5)}_${widget.destination.longitude.toStringAsFixed(5)}';
+  final TextEditingController note = TextEditingController();
+
+  @override
+  void initState() {
+    super.initState();
+    SharedPreferences.getInstance().then((prefs) {
+      if (mounted) note.text = prefs.getString(noteKey) ?? '';
+    });
+    startSensors();
+  }
+
+  void startSensors() {
+    gps?.cancel();
+    compass?.cancel();
+    gps = Geolocator.getPositionStream(locationSettings: const LocationSettings(
+      accuracy: LocationAccuracy.high, distanceFilter: 5,
+    )).listen((p) {
+      if (!mounted || paused) return;
+      final point = LatLng(p.latitude, p.longitude);
+      setState(() { current = point; status = 'Tracking location'; });
+      if (follow && mapReady) map.move(point, map.camera.zoom);
+    }, onError: (_) { if (mounted) setState(() => status = 'GPS unavailable'); });
+    compass = FlutterCompass.events?.listen((event) {
+      if (!mounted || paused) return;
+      final value = event.heading;
+      if (value == null || !value.isFinite) return;
+      setState(() => heading = value);
+      if (!northUp && mapReady) map.rotate(-value);
+    });
+  }
+
+  String get remaining {
+    if (current == null) return 'Locating…';
+    final meters = const Distance().as(LengthUnit.Meter, current!, widget.destination);
+    return widget.metricUnits ? '${(meters / 1000).toStringAsFixed(1)} km away'
+        : '${(meters / 1609.344).toStringAsFixed(1)} mi away';
+  }
+
+  void recenter() {
+    if (current == null || !mapReady) return;
+    setState(() => follow = true);
+    map.move(current!, 16);
+  }
+
+  Future<void> openNotebook() async {
+    await showModalBottomSheet<void>(context: context, isScrollControlled: true,
+      backgroundColor: const Color(0xFF1B2D3C),
+      builder: (sheetContext) => Padding(
+        padding: EdgeInsets.fromLTRB(20, 20, 20, MediaQuery.of(sheetContext).viewInsets.bottom + 20),
+        child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text('Journey notebook', style: TextStyle(fontSize: 22, color: brass)),
+            const SizedBox(height: 12),
+            TextField(controller: note, maxLines: 6, minLines: 3,
+              decoration: const InputDecoration(hintText: 'What do you notice?', border: OutlineInputBorder())),
+            const SizedBox(height: 12),
+            FilledButton.icon(icon: const Icon(Icons.save_outlined), label: const Text('Save note'),
+              onPressed: () async {
+                final prefs = await SharedPreferences.getInstance();
+                await prefs.setString(noteKey, note.text);
+                if (sheetContext.mounted) Navigator.pop(sheetContext);
+              }),
+          ]),
+      ));
+  }
+
+  Future<void> finishJourney({bool arrived = false}) async {
+    if (arrived) {
+      final yes = await showDialog<bool>(context: context, builder: (c) => AlertDialog(
+        title: const Text('Confirm arrival'),
+        content: const Text('Have you reached your destination?'),
+        actions: [TextButton(onPressed: () => Navigator.pop(c, false), child: const Text('Not yet')),
+          FilledButton(onPressed: () => Navigator.pop(c, true), child: const Text('I have arrived'))],
+      ));
+      if (yes != true || !mounted) return;
+    }
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(noteKey, note.text);
+    if (mounted) Navigator.pop(context);
+  }
+
+  @override
+  void dispose() {
+    gps?.cancel(); compass?.cancel(); note.dispose(); map.dispose(); super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => PopScope(
+    canPop: false,
+    onPopInvokedWithResult: (didPop, result) { if (!didPop) finishJourney(); },
+    child: Scaffold(body: Stack(children: [
+      Positioned.fill(child: FlutterMap(
+        mapController: map,
+        options: MapOptions(initialCenter: widget.route.first, initialZoom: 14,
+          onMapReady: () { mapReady = true; if (current != null) recenter(); },
+          onPositionChanged: (_, hasGesture) { if (hasGesture && follow) setState(() => follow = false); }),
+        children: [
+          TileLayer(urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+            userAgentPackageName: 'com.driftapp.drift_globe_poc'),
+          PolylineLayer(polylines: [Polyline(points: widget.route, strokeWidth: 15,
+            color: brass.withOpacity(.28))]),
+          PolylineLayer(polylines: [Polyline(points: widget.route, strokeWidth: 5,
+            color: const Color(0xFFFFD58B))]),
+          MarkerLayer(markers: [
+            Marker(point: widget.destination, width: 48, height: 48,
+              child: const Icon(Icons.place, color: Color(0xFFFFC18B), size: 42)),
+            if (current != null) Marker(point: current!, width: 42, height: 42,
+              child: const Icon(Icons.navigation, color: Colors.lightBlueAccent, size: 32)),
+          ]),
+        ])),
+      Positioned(top: 0, left: 0, right: 0, height: 170, child: IgnorePointer(
+        child: DecoratedBox(decoration: BoxDecoration(gradient: LinearGradient(
+          begin: Alignment.topCenter, end: Alignment.bottomCenter,
+          colors: [ink.withOpacity(.9), Colors.transparent]))))),
+      SafeArea(child: Stack(children: [
+        Positioned(top: 8, left: 12, right: 12, child: Row(children: [
+          IconButton(onPressed: () => finishJourney(), icon: const Icon(Icons.arrow_back, color: brass)),
+          const Text('J O U R N E Y', style: TextStyle(color: brass, letterSpacing: 3)),
+          const Spacer(),
+          IconButton(tooltip: 'Notebook', onPressed: openNotebook,
+            icon: const Icon(Icons.menu_book_outlined, color: brass)),
+          IconButton(tooltip: 'Phone away', onPressed: () => setState(() => phoneAway = true),
+            icon: const Icon(Icons.nights_stay_outlined, color: brass)),
+        ])),
+        Positioned(top: 70, right: 18, child: GestureDetector(
+          onTap: () { setState(() => northUp = !northUp); if (mapReady) map.rotate(northUp ? 0 : -(heading ?? 0)); },
+          child: Container(width: 86, height: 86,
+            decoration: BoxDecoration(color: panel, shape: BoxShape.circle,
+              border: Border.all(color: brass.withOpacity(.7))),
+            child: Transform.rotate(angle: (northUp ? 0 : -(heading ?? 0)) * pi / 180,
+              child: const Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+                Icon(Icons.navigation, color: brass, size: 29),
+                Text('N', style: TextStyle(color: brass, fontSize: 12)),
+              ])),
+          ))),
+        Positioned(right: 16, bottom: 170, child: FloatingActionButton.small(
+          heroTag: 'recenter', backgroundColor: panel, foregroundColor: brass,
+          onPressed: recenter, child: const Icon(Icons.my_location))),
+        Positioned(bottom: 10, left: 12, right: 12, child: Container(
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(color: panel, borderRadius: BorderRadius.circular(20)),
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+            Text(remaining, style: const TextStyle(color: brass, fontSize: 21)),
+            Text(status, style: const TextStyle(fontSize: 12, color: Colors.white70)),
+            const SizedBox(height: 7),
+            Text(widget.warning, style: const TextStyle(fontSize: 10, color: Colors.white70)),
+            const SizedBox(height: 8),
+            Row(children: [
+              Expanded(child: OutlinedButton(onPressed: () => setState(() {
+                paused = !paused; status = paused ? 'Paused' : 'Tracking location';
+                if (!paused) startSensors();
+              }), child: Text(paused ? 'Resume' : 'Pause'))),
+              const SizedBox(width: 8),
+              Expanded(child: OutlinedButton(onPressed: () => finishJourney(arrived: true),
+                child: const Text('I arrived'))),
+              const SizedBox(width: 8),
+              Expanded(child: FilledButton(onPressed: () => finishJourney(),
+                child: const Text('End'))),
+            ]),
+          ]))),
+      ])),
+      if (phoneAway) Positioned.fill(child: Material(color: ink,
+        child: InkWell(onTap: () => setState(() => phoneAway = false),
+          child: const Center(child: Column(mainAxisSize: MainAxisSize.min, children: [
+            Icon(Icons.nights_stay_outlined, color: brass, size: 64),
+            SizedBox(height: 20),
+            Text('THE JOURNEY CONTINUES', style: TextStyle(color: brass, letterSpacing: 3)),
+            SizedBox(height: 16),
+            Text('Tap to return to the map', style: TextStyle(color: Colors.white70)),
+          ]))))),
+    ])));
 }
