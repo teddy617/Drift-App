@@ -7,6 +7,7 @@ import 'package:flutter_map/flutter_map.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:webview_flutter/webview_flutter.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 void main() => runApp(const DriftApp());
 const ink = Color(0xFF07121E);
@@ -34,6 +35,8 @@ class DriftHome extends StatefulWidget {
 
 class _DriftHomeState extends State<DriftHome> {
   late final WebViewController globe;
+  final MapController mapController = MapController();
+  final DraggableScrollableController sheetController = DraggableScrollableController();
   bool onMap = false;
   bool transitioning = false;
   bool choosingOnGlobe = false;
@@ -79,6 +82,70 @@ class _DriftHomeState extends State<DriftHome> {
     }
     setRadius(raw);
     distanceFocus.unfocus();
+  }
+
+  Future<void> loadPreferences() async {
+    final prefs = await SharedPreferences.getInstance();
+    if (!mounted) return;
+    setState(() {
+      accessibleRoadsOnly = prefs.getBool('roads') ?? true;
+      restrictCountry = prefs.getBool('country') ?? true;
+      metricUnits = prefs.getBool('metric') ?? false;
+    });
+  }
+
+  Future<void> savePreference(String key, bool value) async {
+    setState(() {
+      if (key == 'roads') accessibleRoadsOnly = value;
+      if (key == 'country') restrictCountry = value;
+      if (key == 'metric') metricUnits = value;
+    });
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(key, value);
+  }
+
+  Future<void> openSettings() async {
+    await Navigator.push(context, MaterialPageRoute<void>(
+      builder: (context) => Scaffold(
+        appBar: AppBar(title: const Text('Settings'), backgroundColor: ink),
+        body: StatefulBuilder(builder: (context, refresh) => ListView(
+          padding: const EdgeInsets.all(16), children: [
+            SwitchListTile(
+              title: const Text('Accessible roads and paths'),
+              subtitle: const Text('Prefer points close to mapped driving roads'),
+              value: accessibleRoadsOnly,
+              onChanged: (v) { savePreference('roads', v); refresh(() {}); }),
+            SwitchListTile(
+              title: const Text('Stay within starting country'),
+              value: restrictCountry,
+              onChanged: (v) { savePreference('country', v); refresh(() {}); }),
+            SwitchListTile(
+              title: const Text('Use kilometers'),
+              subtitle: const Text('Off: miles'),
+              value: metricUnits,
+              onChanged: (v) { savePreference('metric', v); refresh(() {}); }),
+            const Divider(),
+            const Text(accessibilityWarning),
+            const SizedBox(height: 12),
+            const Text('Road routing cannot verify legal access, closures or pedestrian paths.',
+              style: TextStyle(color: Colors.white70)),
+          ])),
+      )));
+  }
+
+  void fitRoute() {
+    if (!mounted || routePoints.isEmpty || destination == null || mapStart == null) return;
+    final bounds = LatLngBounds.fromPoints([mapStart!, ...routePoints, destination!]);
+    mapController.fitCamera(CameraFit.bounds(
+      bounds: bounds,
+      padding: EdgeInsets.fromLTRB(35, MediaQuery.of(context).padding.top + 90,
+          35, MediaQuery.of(context).size.height * .20 + 45),
+      maxZoom: 17,
+    ));
+    if (sheetController.isAttached) {
+      sheetController.animateTo(.11,
+        duration: const Duration(milliseconds: 400), curve: Curves.easeOutCubic);
+    }
   }
 
   int? roadDistanceMeters;
@@ -156,6 +223,7 @@ class _DriftHomeState extends State<DriftHome> {
           roadDistanceMeters = routeDistance.round();
           searching = false;
         });
+        WidgetsBinding.instance.addPostFrameCallback((_) => fitRoute());
         return;
       }
       throw Exception('No route-verified random point found within this radius. '
@@ -194,12 +262,15 @@ class _DriftHomeState extends State<DriftHome> {
   void dispose() {
     distanceInput.dispose();
     distanceFocus.dispose();
+    sheetController.dispose();
+    mapController.dispose();
     super.dispose();
   }
 
   @override
   void initState() {
     super.initState();
+    loadPreferences();
     globe = WebViewController()
       ..setJavaScriptMode(JavaScriptMode.unrestricted)
       ..setBackgroundColor(ink)
@@ -336,8 +407,8 @@ class _DriftHomeState extends State<DriftHome> {
         Positioned.fill(child: WebViewWidget(controller: globe)),
         if (onMap && mapStart != null)
           Positioned.fill(child: FlutterMap(
-            key: ValueKey('${mapStart!.latitude},${mapStart!.longitude},${destination?.latitude},${destination?.longitude}'),
-            options: MapOptions(initialCenter: destination == null ? mapStart! : LatLng((mapStart!.latitude + destination!.latitude)/2, (mapStart!.longitude + destination!.longitude)/2), initialZoom: destination == null ? 11 : (distanceMiles >= 150 ? 6 : distanceMiles >= 50 ? 8 : 10)),
+            mapController: mapController,
+            options: MapOptions(initialCenter: mapStart!, initialZoom: 11),
             children: [
               TileLayer(
                 urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
@@ -380,7 +451,8 @@ class _DriftHomeState extends State<DriftHome> {
                 color: brass, letterSpacing: 2, fontSize: 13,
               )),
             const SizedBox(width: 12),
-            const Icon(Icons.explore_outlined, color: brass),
+            IconButton(tooltip: 'Settings', onPressed: openSettings,
+              icon: const Icon(Icons.settings_outlined, color: brass)),
           ])),
           if (!onMap && !choosingOnGlobe) ...[
             Positioned(left: 16, right: 16, bottom: 100, child: Row(children: [
@@ -418,6 +490,7 @@ class _DriftHomeState extends State<DriftHome> {
         ])),
         if (onMap)
           SafeArea(top: false, child: DraggableScrollableSheet(
+            controller: sheetController,
             initialChildSize: .23, minChildSize: .11, maxChildSize: .88,
             snap: true, snapSizes: const [.23, .55],
             builder: (context, scroll) => Container(
@@ -451,26 +524,6 @@ class _DriftHomeState extends State<DriftHome> {
                       TextButton(onPressed: searching ? null : applyDistanceInput,
                         child: const Text('Apply')),
                     ]),
-                    SwitchListTile(
-                      contentPadding: EdgeInsets.zero,
-                      title: const Text('Accessible roads and paths'),
-                      subtitle: const Text('Strict road proximity; enabled by default'),
-                      value: accessibleRoadsOnly,
-                      onChanged: searching ? null : (value) => setState(() => accessibleRoadsOnly = value),
-                    ),
-                    SwitchListTile(
-                      contentPadding: EdgeInsets.zero,
-                      title: const Text('Stay within starting country'),
-                      subtitle: const Text('US-only when your starting point is in the US'),
-                      value: restrictCountry,
-                      onChanged: searching ? null : (value) => setState(() => restrictCountry = value),
-                    ),
-                    SwitchListTile(
-                      contentPadding: EdgeInsets.zero,
-                      title: const Text('Use kilometers'),
-                      value: metricUnits,
-                      onChanged: (value) => setState(() => metricUnits = value),
-                    ),
                     const Text(accessibilityWarning,
                       style: TextStyle(color: Color(0xFFE0C7A2), fontSize: 12)),
                     const SizedBox(height: 10),
