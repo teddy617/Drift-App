@@ -17,7 +17,11 @@ window.resetGlobe=()=>{
   globe.controls().autoRotate=true;
 };
 globe.controls().autoRotate=true;globe.controls().autoRotateSpeed=.35;
-function flyTo(lat,lng){globe.controls().autoRotate=false;globe.pointOfView({lat:lat,lng:lng,altitude:0.35},2200)}
+function flyTo(lat,lng){
+  globe.controls().autoRotate=false;
+  // Descend almost to the surface before Flutter reveals the detailed street map.
+  globe.pointOfView({lat:lat,lng:lng,altitude:0.012},3800);
+}
 window.flyTo=flyTo;
 let startMarker = null;
 window.setStartingPoint = (lat,lng) => {
