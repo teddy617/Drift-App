@@ -146,7 +146,7 @@ class _DriftHomeState extends State<DriftHome> {
       maxZoom: 17,
     ));
     if (sheetController.isAttached) {
-      sheetController.animateTo(.11,
+      sheetController.animateTo(.038,
         duration: const Duration(milliseconds: 400), curve: Curves.easeOutCubic);
     }
   }
@@ -393,7 +393,7 @@ class _DriftHomeState extends State<DriftHome> {
     try {
       await globe.runJavaScript('window.flyTo(${point.latitude}, ${point.longitude})');
     } catch (_) { /* Map still opens if globe scripts are unavailable. */ }
-    await Future<void>.delayed(const Duration(milliseconds: 2200));
+    await Future<void>.delayed(const Duration(milliseconds: 3800));
     if (!mounted) return;
     setState(() { onMap = true; transitioning = false; });
   }
@@ -529,13 +529,13 @@ class _DriftHomeState extends State<DriftHome> {
         if (onMap)
           SafeArea(top: false, child: DraggableScrollableSheet(
             controller: sheetController,
-            initialChildSize: .23, minChildSize: .11, maxChildSize: .88,
-            snap: true, snapSizes: const [.23, .55],
+            initialChildSize: .23, minChildSize: .038, maxChildSize: .88,
+            snap: true, snapSizes: const [.038, .23, .55],
             builder: (context, scroll) => Container(
               decoration: const BoxDecoration(color: panel,
                 borderRadius: BorderRadius.vertical(top: Radius.circular(28))),
               child: ListView(controller: scroll,
-                padding: const EdgeInsets.fromLTRB(24, 14, 24, 32), children: [
+                padding: const EdgeInsets.fromLTRB(24, 9, 24, 32), children: [
                   Center(child: Container(width: 42, height: 4,
                     decoration: BoxDecoration(color: Colors.white38,
                       borderRadius: BorderRadius.circular(4)))),
@@ -638,6 +638,21 @@ class _JourneyScreenState extends State<JourneyScreen> {
       if (mounted) note.text = prefs.getString(noteKey) ?? '';
     });
     startSensors();
+    acquireInitialLocation();
+  }
+
+  Future<void> acquireInitialLocation() async {
+    try {
+      final p = await Geolocator.getCurrentPosition(
+        desiredAccuracy: LocationAccuracy.high,
+        timeLimit: const Duration(seconds: 12));
+      if (!mounted) return;
+      final point = LatLng(p.latitude, p.longitude);
+      setState(() { current = point; status = 'Tracking location'; });
+      if (mapReady && follow) map.move(point, 18);
+    } catch (_) {
+      if (mounted && current == null) setState(() => status = 'Waiting for GPS — tap recenter when available');
+    }
   }
 
   void startSensors() {
@@ -649,7 +664,7 @@ class _JourneyScreenState extends State<JourneyScreen> {
       if (!mounted || paused) return;
       final point = LatLng(p.latitude, p.longitude);
       setState(() { current = point; status = 'Tracking location'; });
-      if (follow && mapReady) map.move(point, map.camera.zoom);
+      if (follow && mapReady) map.move(point, map.camera.zoom < 17.5 ? 18 : map.camera.zoom);
     }, onError: (_) { if (mounted) setState(() => status = 'GPS unavailable'); });
     compass = FlutterCompass.events?.listen((event) {
       if (!mounted || paused) return;
@@ -670,7 +685,7 @@ class _JourneyScreenState extends State<JourneyScreen> {
   void recenter() {
     if (current == null || !mapReady) return;
     setState(() => follow = true);
-    map.move(current!, 16);
+    map.move(current!, 18);
   }
 
   Future<void> openNotebook() async {
@@ -722,7 +737,7 @@ class _JourneyScreenState extends State<JourneyScreen> {
     child: Scaffold(body: Stack(children: [
       Positioned.fill(child: FlutterMap(
         mapController: map,
-        options: MapOptions(initialCenter: widget.route.first, initialZoom: 14,
+        options: MapOptions(initialCenter: current ?? widget.route.first, initialZoom: 18,
           onMapReady: () { mapReady = true; if (current != null) recenter(); },
           onPositionChanged: (_, hasGesture) { if (hasGesture && follow) setState(() => follow = false); }),
         children: [
