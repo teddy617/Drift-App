@@ -19,4 +19,13 @@ window.resetGlobe=()=>{
 globe.controls().autoRotate=true;globe.controls().autoRotateSpeed=.35;
 function flyTo(lat,lng){globe.controls().autoRotate=false;globe.pointOfView({lat:lat,lng:lng,altitude:0.35},2200)}
 window.flyTo=flyTo;
+let startMarker = null;
+window.setStartingPoint = (lat,lng) => {
+  globe.pointsData([{lat:lat,lng:lng,size:.45,color:'#d0b27d'}])
+    .pointAltitude(.015).pointRadius('size').pointColor('color');
+};
+globe.onGlobeClick(({lat,lng}) => {
+  window.setStartingPoint(lat,lng);
+  if (window.DriftBridge) window.DriftBridge.postMessage(JSON.stringify({lat,lng}));
+});
 </script></body></html>
