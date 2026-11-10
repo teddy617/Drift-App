@@ -1,5 +1,7 @@
-# Drift v0.2
+# Drift v0.3 — Starting Point Selection
 
-Interface foundation prototype. Globe and map use online resources. No live location, routing or destination generation yet.
+Android Flutter prototype. Includes current-location permission flow, manual starting-point selection by tapping the globe, return-to-globe navigation, map header gradient, and a marker for the selected starting point.
 
-Upload files preserving lowercase `lib/` and `assets/` directories. The workflow builds a debug APK on pushes to main.
+**Not implemented:** generated destinations, routing, accounts, production maps, and offline assets. No location permission is requested on launch. Device location is accessed only after selecting **Use my current location**.
+
+Upload preserving `.github/workflows/`, `assets/`, and `lib/` folder paths. Pushes to `main` build a debug APK via GitHub Actions. Prefer uploading all changes in one commit to avoid repeated builds.
