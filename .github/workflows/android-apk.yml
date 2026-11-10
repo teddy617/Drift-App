@@ -1,17 +1,13 @@
-
 name: Build Android APK
-
 on:
   workflow_dispatch:
   push:
     branches: [main]
-
 jobs:
   android:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
@@ -20,13 +16,11 @@ jobs:
           java-version: '17'
       - uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.35.7'
           channel: stable
+          flutter-version: "3.35.7"
           cache: true
-
       - name: Generate Android project
         run: flutter create --platforms=android --project-name drift_globe_poc --org com.driftapp .
-
       - name: Enable internet permission
         run: |
           python3 - <<'PY'
@@ -36,22 +30,21 @@ jobs:
           permission = '<uses-permission android:name="android.permission.INTERNET" />'
           if permission not in s:
               s = s.replace('<manifest xmlns:android="http://schemas.android.com/apk/res/android">', '<manifest xmlns:android="http://schemas.android.com/apk/res/android">\n    ' + permission)
+          for loc in ['android.permission.ACCESS_COARSE_LOCATION', 'android.permission.ACCESS_FINE_LOCATION']:
+              item = f'<uses-permission android:name="{loc}" />'
+              if item not in s:
+                  s = s.replace('<manifest xmlns:android="http://schemas.android.com/apk/res/android">', '<manifest xmlns:android="http://schemas.android.com/apk/res/android">\n    ' + item)
           p.write_text(s)
           PY
-
       - name: Install dependencies
         run: flutter pub get
-
-      - name: Analyze code
+      - name: Analyze application
         run: flutter analyze lib --no-fatal-infos
-
       - name: Build debug APK
-        run: flutter build apk --debug --verbose
-
+        run: flutter build apk --debug
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: drift-android-debug-apk
           path: build/app/outputs/flutter-apk/app-debug.apk
           retention-days: 14
-          
