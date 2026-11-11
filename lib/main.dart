@@ -1,3 +1,4 @@
+import 'features/intention/intention_engine.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:math';
@@ -44,6 +45,8 @@ class _DriftHomeState extends State<DriftHome> {
   bool transitioning = false;
   bool choosingOnGlobe = false;
   String mode = 'Random';
+  String intentionCategory = 'Peace';
+  final TextEditingController intentionDescription = TextEditingController();
   LatLng? selectedStart;
   LatLng? mapStart;
   LatLng? destination;
@@ -183,6 +186,51 @@ class _DriftHomeState extends State<DriftHome> {
   }
 
 
+  Future<void> findIntentionDestination() async {
+    final origin = mapStart;
+    if (origin == null || searching) return;
+    applyDistanceInput();
+    setState(() {
+      searching = true;
+      explorationError = null;
+      destination = null;
+      destinationName = null;
+      routePoints = [];
+      roadDistanceMeters = null;
+    });
+    try {
+      String? originCountry;
+      if (restrictCountry) {
+        originCountry = await countryCodeFor(origin);
+        if (originCountry == null) throw StateError('Could not verify starting country.');
+      }
+      final result = await IntentionEngine().generate(
+        origin: origin,
+        radiusMeters: radiusMeters,
+        category: intentionCategory,
+        description: intentionDescription.text,
+        roadsOnly: accessibleRoadsOnly,
+        countryAllowed: originCountry == null ? null : (point) async =>
+          await countryCodeFor(point) == originCountry,
+      );
+      if (!mounted) return;
+      setState(() {
+        destination = result.point;
+        destinationName = 'Unmarked ${intentionCategory.toLowerCase()} discovery';
+        routePoints = result.route;
+        roadDistanceMeters = result.roadMeters;
+        searching = false;
+      });
+      WidgetsBinding.instance.addPostFrameCallback((_) => fitRoute());
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        searching = false;
+        explorationError = e.toString().replaceFirst('Bad state: ', '').replaceFirst('Exception: ', '');
+      });
+    }
+  }
+
   Future<void> findRandomDestination() async {
     final origin = mapStart;
     if (origin == null || searching) return;
@@ -293,6 +341,7 @@ class _DriftHomeState extends State<DriftHome> {
 
   @override
   void dispose() {
+    intentionDescription.dispose();
     distanceInput.dispose();
     distanceFocus.dispose();
     sheetController.dispose();
@@ -587,6 +636,39 @@ class _DriftHomeState extends State<DriftHome> {
                       padding: const EdgeInsets.only(top: 12),
                       child: Text(explorationError!, style: const TextStyle(color: Color(0xFFFFB5A7))),
                     ),
+                  ] else if (mode == 'Intention') ...[
+                    const Text('Choose what you seek. Drift generates an unexpected point influenced by the surroundings, not an attraction entrance.'),
+                    const SizedBox(height: 12),
+                    Wrap(spacing: 6, runSpacing: 6, children: intentionCategories.map((category) =>
+                      ChoiceChip(label: Text(category), selected: intentionCategory == category,
+                        onSelected: searching ? null : (_) => setState(() => intentionCategory = category))).toList()),
+                    const SizedBox(height: 10),
+                    TextField(controller: intentionDescription, maxLength: 140, maxLines: 2,
+                      decoration: const InputDecoration(labelText: 'Describe your intention (optional)')),
+                    Text('Radius: $radiusLabel', style: const TextStyle(color: brass)),
+                    Slider(value: radiusSliderPosition.clamp(0.0, 1.0), min: 0, max: 1,
+                      onChanged: searching ? null : (value) => setRadius(radiusFromSlider(value))),
+                    Row(children: [
+                      Expanded(child: TextField(controller: distanceInput, focusNode: distanceFocus,
+                        keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                        decoration: const InputDecoration(labelText: 'Distance (miles)', isDense: true),
+                        onSubmitted: (_) => applyDistanceInput())),
+                      TextButton(onPressed: searching ? null : applyDistanceInput, child: const Text('Apply')),
+                    ]),
+                    const SizedBox(height: 8),
+                    FilledButton.icon(onPressed: searching ? null : findIntentionDestination,
+                      icon: const Icon(Icons.explore_outlined),
+                      label: Text(destination == null ? 'Find my Drift' : 'Find another')),
+                    if (searching) const Padding(padding: EdgeInsets.all(12), child: LinearProgressIndicator()),
+                    if (destinationName != null) ...[
+                      const SizedBox(height: 10),
+                      Text(destinationName!, style: const TextStyle(color: brass, fontSize: 18)),
+                      if (roadDistanceMeters != null) Text('Route verified: ${metricUnits ? (roadDistanceMeters! / 1000).toStringAsFixed(1) + ' km' : (roadDistanceMeters! / 1609.344).toStringAsFixed(1) + ' mi'}'),
+                      const Text('Context is estimated. A routable road does not guarantee a suitable stopping place.'),
+                      FilledButton.icon(onPressed: startJourney, icon: const Icon(Icons.explore), label: const Text('Start Journey')),
+                      OutlinedButton.icon(onPressed: openGoogleMaps, icon: const Icon(Icons.map_outlined), label: const Text('Open in Google Maps')),
+                    ],
+                    if (explorationError != null) Text(explorationError!, style: const TextStyle(color: Color(0xFFFFB5A7))),
                   ] else
                     const Text('Destination generation for this mode comes in a later version.'),
                   const SizedBox(height: 16),
