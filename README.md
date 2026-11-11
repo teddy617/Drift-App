@@ -18,3 +18,22 @@ Based on the working v0.4 refinement. New features:
 
 ## Install
 Upload `lib/main.dart`, `pubspec.yaml`, `README.md` and keep the supplied workflow and assets. Commit once. Build with GitHub Actions.
+
+## v0.5.1 visual refinements
+- Globe descent now continues to near-surface altitude over 3.8 seconds before map transition.
+- Random panel collapses to a ~3.8% screen-height handle, including after destination generation.
+- Journey immediately requests high-accuracy GPS and starts at street-level zoom 18; live follow and recenter use that zoom.
+- GPS may need several seconds to acquire a fix; map cannot accurately center on the user until permission and location are available.
+
+## v0.6 Intention Mode (development build)
+
+Hybrid category + optional description, OSM geographic influences, adaptive point sampling,
+OSRM routing, and weighted selection. Intention destinations remain unmarked points rather
+than POI entrances. The existing Random and Journey flows are retained.
+
+**Limitations:** Public Overpass/OSRM services can be slow or unavailable. The geographic
+context query is capped at 20 km around the start even when the user chooses a larger
+radius; this means long-range intention coverage is incomplete. Time-of-day currently
+uses the device's local clock, not the destination time zone. Social activity is only
+heuristically estimated. No dedicated legal-access or wheelchair-access checks are added.
+This build has not been compiled or device-tested in this environment.
