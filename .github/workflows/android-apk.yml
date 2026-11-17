@@ -2,7 +2,7 @@ name: Build Android APK
 on:
   workflow_dispatch:
   push:
-    branches: [main]
+    branches: [main, 'v0.6-stabilization-tests']
 jobs:
   android:
     runs-on: ubuntu-latest
@@ -40,6 +40,8 @@ jobs:
         run: flutter pub get
       - name: Analyze application
         run: flutter analyze lib --no-fatal-infos
+      - name: Run unit tests
+        run: flutter test
       - name: Build debug APK
         run: flutter build apk --debug
       - name: Upload APK
